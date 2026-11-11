@@ -3526,6 +3526,11 @@ textarea {
   background: var(--accent-soft);
 }
 
+.browser-panel__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .browser-panel__address {
   flex: 1 1 auto;
   min-width: 0;

@@ -18,6 +18,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.2.53",
+    date: "2026-11-11",
+    items: [
+      {
+        icon: "solar:square-top-down-bold-duotone",
+        title: "Open in my browser",
+        body: "A button in the browser panel opens the page in your own browser, for logins and verifications the built-in one cannot pass.",
+      },
+      {
+        icon: "solar:shield-warning-bold-duotone",
+        title: "Cloudflare checks hand back to you",
+        body: "When a page shows an anti-bot verification, the agent stops and asks you to do that step instead of retrying.",
+      },
+    ],
+  },
+  {
     version: "0.2.52",
     date: "2026-11-07",
     items: [

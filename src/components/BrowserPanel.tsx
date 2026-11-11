@@ -266,6 +266,18 @@ export function BrowserPanel({ workspacePath, active }: { workspacePath: string;
         <button
           type="button"
           className="browser-panel__btn"
+          title="Open this page in your own browser (for logins and verifications this one cannot pass)"
+          disabled={!activeTab || !/^https?:\/\//i.test(activeTab.url)}
+          onClick={() => {
+            if (activeTab) void api.openExternalUrl(activeTab.url).catch(() => undefined);
+          }}
+        >
+          <Icon icon="solar:square-top-down-linear" width={14} height={14} />
+          <span>Open in my browser</span>
+        </button>
+        <button
+          type="button"
+          className="browser-panel__btn"
           data-active={picking ? "true" : "false"}
           title="Point at an element to send it to the chat"
           onClick={() => {

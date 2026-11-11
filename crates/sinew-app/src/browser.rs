@@ -1169,7 +1169,9 @@ async fn after(session: &mut BrowserSession, before: &Before, workspace: &str, r
     };
     let state = sinew_browser_eval(
         session,
-        "[location.href, document.title, performance.timeOrigin, window.__sinew ? window.__sinew.lastMutation : 0]",
+        &format!(
+            "[location.href, document.title, performance.timeOrigin, window.__sinew ? window.__sinew.lastMutation : 0, {BOT_CHECK_JS}]"
+        ),
     )
     .await;
     let url = state[0].as_str().unwrap_or_default();
@@ -1186,6 +1188,9 @@ async fn after(session: &mut BrowserSession, before: &Before, workspace: &str, r
         out.push_str("The page updated; references to removed elements are now stale.\n");
     } else if report == Report::Changes {
         out.push_str("No visible change on the page.\n");
+    }
+    if state[4].as_bool().unwrap_or(false) {
+        out.push_str(BOT_CHECK_NOTE);
     }
     if session.tab_count() > 1 && before.tabs != session.tab_count() || session.tab_count() > 1 && opened_tab {
         out.push_str(&format!("Tabs:\n{}", session.tab_list().await));
@@ -1205,6 +1210,12 @@ async fn after(session: &mut BrowserSession, before: &Before, workspace: &str, r
     }
     out
 }
+
+/// True when the page shows an anti-bot check (Cloudflare Turnstile or
+/// challenge page), which an automated browser cannot pass.
+const BOT_CHECK_JS: &str = "!!(document.querySelector('iframe[src*=\\'challenges.cloudflare.com\\'], .cf-turnstile, #challenge-form, #challenge-running, #cf-challenge-running') || /^(just a moment|un instant|checking your browser)/i.test(document.title))";
+
+const BOT_CHECK_NOTE: &str = "This page shows an anti-bot verification (Cloudflare). It blocks automated browsers on purpose: do not retry it or try to get around it. Stop and ask the user to do this step themselves in their own browser (the browser panel's \"Open in my browser\" button), then continue with what does not need it.\n";
 
 async fn sinew_browser_eval(session: &BrowserSession, expression: &str) -> Value {
     session.eval(expression).await.unwrap_or(Value::Null)
@@ -1494,6 +1505,8 @@ mod tests {
 </script>
 </body></html>"#;
 
+        const CHALLENGE: &str = "<!doctype html><title>Just a moment...</title><div class=\"cf-turnstile\"></div>";
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1503,7 +1516,9 @@ mod tests {
                     let mut buf = [0u8; 4096];
                     let n = socket.read(&mut buf).await.unwrap_or(0);
                     let request = String::from_utf8_lossy(&buf[..n]);
-                    let (status, body, kind) = if request.starts_with("GET /api/fail") {
+                    let (status, body, kind) = if request.starts_with("GET /challenge") {
+                        ("200 OK", CHALLENGE, "text/html")
+                    } else if request.starts_with("GET /api/fail") {
                         ("500 Internal Server Error", "{\"error\":\"nope\"}", "application/json")
                     } else if request.starts_with("GET / ") {
                         ("200 OK", FIXTURE, "text/html")
@@ -1534,6 +1549,8 @@ mod tests {
         let opened = run(tool_names::BROWSER_NAVIGATE, json!({ "url": format!("127.0.0.1:{port}"), "headless": true })).await;
         assert!(!opened.is_error, "{}", opened.content);
         assert!(opened.content.contains("button \"Send\" [ref_"), "{}", opened.content);
+
+        assert!(!opened.content.contains("anti-bot"), "{}", opened.content);
 
         let page = run(tool_names::BROWSER_READ_PAGE, json!({})).await;
         assert!(page.content.contains("heading \"Sinew fixture\""), "{}", page.content);
@@ -1594,6 +1611,8 @@ mod tests {
         let disabled = run(tool_names::BROWSER_EVAL, json!({ "expression": "1" })).await;
         assert!(disabled.is_error, "{}", disabled.content);
 
+        let challenge = run(tool_names::BROWSER_NAVIGATE, json!({ "url": format!("127.0.0.1:{port}/challenge") })).await;
+        assert!(challenge.content.contains("anti-bot verification"), "{}", challenge.content);
         run(tool_names::BROWSER_CLOSE, json!({})).await;
         let _ = std::fs::remove_dir_all(workspace);
     }
