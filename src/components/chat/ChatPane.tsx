@@ -16,6 +16,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { BROWSER_PICK_EVENT } from "../BrowserPanel";
+import { withBrowseSetup } from "../BrowseSetupDialog";
 import { AIThinkingBlock } from "./AIThinkingBlock";
 import { FileChangeBlock } from "./FileChangeBlock";
 import { FileLinkedText, Markdown } from "./Markdown";
@@ -2056,6 +2057,22 @@ export function ChatPane({
       );
     }
   }, [planWorkflow.status]);
+  // A new or updated plan opens in the editor, to read (and edit) before
+  // implementing: the implementation runs from the file, not the chat.
+  const planArtifactPath =
+    planWorkflow.status === "planReady" ? planWorkflow.artifact.path : null;
+  const planArtifactVersion =
+    planWorkflow.status === "planReady" ? planWorkflow.artifact.updatedAtMs ?? 0 : 0;
+  const planKey = planArtifactPath ? `${planArtifactPath}@${planArtifactVersion}` : "";
+  // Last plan seen per conversation: switching to a conversation that
+  // already has a plan does not open it.
+  const seenPlanRef = useRef({ conversationId, planKey });
+  useEffect(() => {
+    const seen = seenPlanRef.current;
+    seenPlanRef.current = { conversationId, planKey };
+    if (seen.conversationId !== conversationId || seen.planKey === planKey) return;
+    if (planArtifactPath) onOpenFile(planArtifactPath);
+  }, [conversationId, onOpenFile, planArtifactPath, planKey]);
   const prevGoalStatusRef = useRef(goalWorkflow.status);
   useEffect(() => {
     const previous = prevGoalStatusRef.current;
@@ -2309,7 +2326,7 @@ export function ChatPane({
       return;
     }
     if (forceBrowser && value) {
-      value = `Use the browser_* tools to actually open and visually inspect what I am describing — do NOT just read the source code. Open it with browser_navigate, act on the element references it returns (browser_click, browser_type…), and check visuals with browser_screenshot. My request:\n\n${value}`;
+      value = `Use a browser to actually open and visually inspect what I am describing — do NOT just read the source code. Use the browser_* tools (browser_navigate, then act on the element references it returns and check visuals with browser_screenshot); if the page needs my logins or my own Chrome and the browse MCP tools are available, use those instead. My request:\n\n${value}`;
     }
     if (view.status === "streaming" || isStreaming) {
       const editing =
@@ -4480,7 +4497,9 @@ export function ChatPane({
                 type="button"
                 className="composer__iconbtn"
                 data-active={forceBrowser ? "true" : "false"}
-                onClick={() => setForceBrowser((value) => !value)}
+                onClick={() =>
+                  forceBrowser ? setForceBrowser(false) : withBrowseSetup(() => setForceBrowser(true))
+                }
                 title={
                   forceBrowser
                     ? "Browser mode ON — agent will open Chrome and inspect the page visually"

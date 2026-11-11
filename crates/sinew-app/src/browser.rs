@@ -1215,7 +1215,7 @@ async fn after(session: &mut BrowserSession, before: &Before, workspace: &str, r
 /// challenge page), which an automated browser cannot pass.
 const BOT_CHECK_JS: &str = "!!(document.querySelector('iframe[src*=\\'challenges.cloudflare.com\\'], .cf-turnstile, #challenge-form, #challenge-running, #cf-challenge-running') || /^(just a moment|un instant|checking your browser)/i.test(document.title))";
 
-const BOT_CHECK_NOTE: &str = "This page shows an anti-bot verification (Cloudflare). It blocks automated browsers on purpose: do not retry it or try to get around it. Stop and ask the user to do this step themselves in their own browser (the browser panel's \"Open in my browser\" button), then continue with what does not need it.\n";
+const BOT_CHECK_NOTE: &str = "This page shows an anti-bot verification (Cloudflare). It blocks automated browsers on purpose: do not retry it or try to get around it. Stop and tell the user. If the `browse` MCP server is available, it drives the user's own Chrome, where they can pass this check: use it with a handoff. Otherwise continue with what does not need this page.\n";
 
 async fn sinew_browser_eval(session: &BrowserSession, expression: &str) -> Value {
     session.eval(expression).await.unwrap_or(Value::Null)

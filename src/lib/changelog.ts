@@ -18,6 +18,27 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.2.54",
+    date: "2026-11-11",
+    items: [
+      {
+        icon: "solar:checklist-minimalistic-bold-duotone",
+        title: "Plans you can implement from scratch",
+        body: "Plans now carry their decisions, checkable steps with how to verify each, and implementation notes, so \"implement and clear context\" knows what to do. Steps fill the todo list and get checked off in the plan file.",
+      },
+      {
+        icon: "solar:document-text-bold-duotone",
+        title: "Review the plan before implementing",
+        body: "A ready plan opens in the editor; edit it and the implementation follows your version.",
+      },
+      {
+        icon: "solar:global-bold-duotone",
+        title: "Use your own Chrome",
+        body: "OpenCode Browse comes preconfigured: the browser buttons walk you through setting it up, so the agent can use your logins and tabs.",
+      },
+    ],
+  },
+  {
     version: "0.2.53",
     date: "2026-11-11",
     items: [

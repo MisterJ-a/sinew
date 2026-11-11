@@ -19,6 +19,7 @@ import { FileTree, type FileTreeHandle } from "./FileTree";
 import { ConversationList } from "./ConversationList";
 import { GitPanel, GitMark } from "./GitPanel";
 import { BrowserPanel } from "./BrowserPanel";
+import { BrowseSetupDialog, withBrowseSetup } from "./BrowseSetupDialog";
 import { EditorPane } from "./EditorPane";
 import { SettingsPane } from "./SettingsPane";
 import { SettingsDialog } from "./SettingsDialog";
@@ -2162,7 +2163,7 @@ export function Workspace({
           <button
             className="titlebar__btn"
             data-on={browserActive ? "true" : "false"}
-            onClick={() => (browserActive ? closeBrowser() : openBrowser())}
+            onClick={() => (browserActive ? closeBrowser() : withBrowseSetup(openBrowser))}
             title={browserActive ? "Close the browser" : "Open the browser"}
           >
             <Icon icon="solar:global-linear" width={12} height={12} />
@@ -2564,6 +2565,7 @@ export function Workspace({
           >
             <Icon icon="solar:alt-arrow-right-linear" width={14} height={14} />
           </button>
+          <BrowseSetupDialog />
           <ChatPane
             workspacePath={workspacePath}
             conversationId={activeConv.id}

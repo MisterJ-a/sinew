@@ -300,3 +300,69 @@ fn swarm_completion_wake_text_mentions_finished_and_agent_responses() {
     assert!(wake_text.contains("Built the feature."));
     assert!(wake_text.contains("Agent Swarm a terminé"));
 }
+
+#[test]
+fn the_plan_file_gets_the_plan_not_the_closing_line() {
+    let text = |role: Role, value: &str, meta: Option<Value>| ChatMessage {
+        role,
+        parts: vec![Part::Text {
+            text: value.into(),
+            meta,
+        }],
+    };
+    let plan = "# Plan\n\n1. Add the table\n2. Wire the API\n3. Test it end to end";
+    let history = vec![
+        text(Role::User, "plan the feature", None),
+        text(Role::Assistant, plan, None),
+        text(Role::Assistant, "Here is the plan, tell me.", None),
+    ];
+    assert_eq!(plan_message_index(&history, 0), Some(1));
+
+    // A message marked as the plan wins even when shorter.
+    let mut marked = history.clone();
+    marked.push(text(Role::Assistant, "Short plan.", Some(json!({ "plan_proposal": true }))));
+    marked.push(text(Role::Assistant, "Done, waiting for you.", None));
+    assert_eq!(plan_message_index(&marked, 0), Some(3));
+
+    // Earlier turns are not considered.
+    assert_eq!(plan_message_index(&history, 2), None);
+}
+
+#[test]
+fn plan_steps_become_the_todo_list_and_get_checked_off() {
+    let plan = "# Plan\n\n## Goal\nShip it.\n\n## Steps\n- [ ] Add the table — done when the migration runs\n- [x] Read the docs\n- [ ] Wire the API — done when /api/x answers\n\n## Implementation notes\n- [ ] not a step\n";
+    let todo = todo_from_plan(plan).unwrap();
+    let texts: Vec<_> = todo.tasks.iter().map(|task| task.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Add the table — done when the migration runs", "Read the docs", "Wire the API — done when /api/x answers"]
+    );
+    assert!(matches!(todo.tasks[1].status, TodoStatus::Done));
+    assert!(todo_from_plan("# No steps here\n").is_none());
+
+    let mut progress = todo.clone();
+    progress.tasks[0].status = TodoStatus::Done;
+    let checked = plan_with_checked_steps(plan, &progress);
+    assert!(checked.contains("- [x] Add the table"));
+    assert!(checked.contains("- [ ] Wire the API"));
+    assert!(checked.contains("- [ ] not a step"));
+    assert!(checked.ends_with('\n'));
+}
+
+#[test]
+fn a_written_plan_wins_and_question_turns_are_not_plans() {
+    let assistant = |parts: Vec<Part>| ChatMessage { role: Role::Assistant, parts };
+    let say = |value: &str| Part::Text { text: value.into(), meta: None };
+    let call = |name: &str, input: Value| Part::ToolCall { id: "t".into(), name: name.into(), input, meta: None };
+    let user = ChatMessage { role: Role::User, parts: vec![say("go")] };
+
+    let history = vec![
+        user.clone(),
+        assistant(vec![say("A long message that is not the plan at all, just thinking out loud."), call("write_plan", json!({ "markdown": "# Real plan" }))]),
+        assistant(vec![say("Saved.")]),
+    ];
+    assert_eq!(written_plan(&history, 0), Some((1, "# Real plan".to_string())));
+
+    let questions = vec![user, assistant(vec![say("Which one?"), call("question", json!({}))])];
+    assert!(turn_has_question_tool(&questions, 0));
+}

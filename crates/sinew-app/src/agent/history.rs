@@ -190,16 +190,6 @@ fn tool_call_ids(message: &ChatMessage) -> Vec<String> {
         .collect()
 }
 
-fn tool_result_ids(message: &ChatMessage) -> BTreeSet<String> {
-    message
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            Part::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
-            _ => None,
-        })
-        .collect()
-}
 
 fn interrupted_tool_result(id: String, content: &'static str) -> Part {
     Part::ToolResult {

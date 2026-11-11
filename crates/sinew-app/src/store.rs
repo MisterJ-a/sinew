@@ -147,15 +147,12 @@ Rules:
 - After each normal answer to a Question, inspect/explore more if needed, then ask the next Question.
 - If you have no remaining substantive question, ask the user to confirm that you should create the plan now. Still use the Question tool.
 - Only when the user message contains <plan_mode_control action="stop_questions">, stop asking questions and write the complete plan now.
-- When the plan is ready, respond with only the Markdown plan. Do not implement it.
-
-STRICTLY FORBIDDEN:
-- Low-level implementation details: code snippets, file paths/structures, function/variable names, or shell commands.
+- When the plan is ready, save it with the write_plan tool. Do not implement it.
 
 REQUIRED:
 - All specific technologies, design choices, and parameters agreed upon during brainstorming. Do not invent extra components or options not discussed.
 
-Focus on WHAT the system should do and how components behave, not HOW the code is written. Keep it clear and aligned with the discussed scope.
+In the Plan section, focus on WHAT the system should do and how components behave, not HOW the code is written: no code there. Files, functions and commands belong in the Implementation notes section, for whoever implements the plan.
 
 You may include Mermaid diagrams (in ```mermaid fenced blocks) when a flow, decision tree, sequence, or set of relationships would be clearer as a picture than as prose. Keep diagram labels at the same level of abstraction as the rest of the plan: describe intent and behavior, not files, functions, or implementation details."#;
 
@@ -1459,6 +1456,36 @@ impl AppStore {
         }
 
         Ok(McpSettings::default())
+    }
+
+    /// Adds the Browse MCP server (off) once per install, so it is there to
+    /// turn on. A user who removes it is not given it back.
+    pub fn ensure_default_browse_mcp(&self) -> Result<()> {
+        const DONE_KEY: &str = "mcp_default_browse_added";
+        let conn = self.connection()?;
+        let done = conn
+            .query_row(
+                "select value_json from app_settings where key = ?1",
+                params![DONE_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("unable to read MCP defaults")?
+            .is_some();
+        if done {
+            return Ok(());
+        }
+        let mut settings = self.load_mcp_settings()?;
+        if settings.add_default_browse() {
+            self.save_mcp_settings(&settings)?;
+        }
+        conn.execute(
+            "insert into app_settings (key, value_json, updated_at_ms)
+             values (?1, 'true', ?2)
+             on conflict(key) do update set value_json = excluded.value_json",
+            params![DONE_KEY, now_ms()],
+        )?;
+        Ok(())
     }
 
     pub fn save_mcp_settings(&self, settings: &McpSettings) -> Result<()> {

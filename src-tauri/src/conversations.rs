@@ -231,6 +231,39 @@ pub(super) async fn list_mcp_settings(
     state.store.load_mcp_settings().map_err(error_to_string)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BrowseSetupStatus {
+    configured: bool,
+    enabled: bool,
+}
+
+/// Whether OpenCode Browse is configured and on.
+#[tauri::command]
+pub(super) async fn browse_setup_status(
+    state: State<'_, DesktopState>,
+) -> std::result::Result<BrowseSetupStatus, String> {
+    let settings = state.store.load_mcp_settings().map_err(error_to_string)?;
+    Ok(BrowseSetupStatus {
+        configured: settings.servers.iter().any(sinew_app::is_browse_server),
+        enabled: settings.browse_enabled(),
+    })
+}
+
+/// Turns OpenCode Browse on (adding it if needed).
+#[tauri::command]
+pub(super) async fn enable_browse_mcp(
+    state: State<'_, DesktopState>,
+) -> std::result::Result<McpSettings, String> {
+    let mut settings = state.store.load_mcp_settings().map_err(error_to_string)?;
+    settings.enable_browse();
+    state
+        .store
+        .save_mcp_settings(&settings)
+        .map_err(error_to_string)?;
+    Ok(settings)
+}
+
 /// Return the global default mode/model assignment without requiring a
 /// workspace to be open. Used by Welcome-screen flows (e.g. the migration
 /// dialog) so the user can see which model will run an upcoming agentic

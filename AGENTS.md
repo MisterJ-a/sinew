@@ -299,6 +299,7 @@ Code map:
     ├── types.ts
     ├── vite-env.d.ts
     ├── components
+    │   ├── BrowseSetupDialog.tsx
     │   ├── BrowserPanel.tsx
     │   ├── ConversationList.tsx
     │   ├── EditorPane.tsx

@@ -44,7 +44,7 @@ use sinew_app::{
     InstalledSkill, McpSettings, McpToolRegistry, ModeModelSettings, OpenRouterModelRecord,
     PlanArtifactState, PlanWorkflowState, QuestionTool, ReadTool, SavedConversation, SkillSettings,
     SkillTool, SubAgentConfig, SubAgentSettings, SubAgentTool, TeamRuntime, TeamTool,
-    TerminalPathResolution, ToDoListTool, TodoListState, ToolSettings, ToolSettingsView,
+    TerminalPathResolution, ToDoListTool, TodoListState, TodoStatus, TodoTask, ToolSettings, ToolSettingsView,
     TurnCancel, TurnContext, WebFetchTool, WebSearchTool, WorkspaceBootstrap,
     WorkspaceCopyOperation, WorkspaceDeletedEntry, WorkspaceFileChangeEvent, WorkspaceSearchResult,
     WriteFileTool,
@@ -156,6 +156,9 @@ pub fn run() {
 
     let store = AppStore::open_default().expect("unable to open app store");
     sinew_app::mcp_oauth::install_token_store(store.clone());
+    if let Err(err) = store.ensure_default_browse_mcp() {
+        tracing::warn!("unable to add the default Browse MCP server: {err}");
+    }
     // Sync the agent core's shell-preference cache from persisted settings so
     // the very first turn (system prompt + bash tool) already reflects the
     // user's choice (PowerShell vs WSL on Windows).
@@ -454,6 +457,8 @@ pub fn run() {
             conversations::get_shell_preference,
             conversations::set_shell_preference,
             conversations::list_mcp_settings,
+            conversations::browse_setup_status,
+            conversations::enable_browse_mcp,
             conversations::save_mcp_settings,
             conversations::import_mcp_servers_command,
             mcp_oauth::start_mcp_oauth_login,

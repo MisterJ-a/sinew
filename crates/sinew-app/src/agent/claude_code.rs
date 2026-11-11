@@ -43,6 +43,15 @@ const TRANSCRIPT_LIMIT: usize = 400_000;
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// `<tag>…</tag>` out of a prompt, tags included.
+fn tagged_block(prompt: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = prompt.find(&open)?;
+    let end = prompt[start..].find(&close)? + start + close.len();
+    Some(prompt[start..end].to_string())
+}
+
 /// Where the previous Claude Code session left off.
 struct SessionRecord {
     session_id: String,
@@ -56,6 +65,7 @@ pub(super) async fn run_claude_code_turn(ctx: TurnContext) -> TurnOutput {
         model,
         cache_key,
         mode,
+        system_prompt,
         mut history,
         mut todo_list,
         goal_workflow,
@@ -116,14 +126,27 @@ pub(super) async fn run_claude_code_turn(ctx: TurnContext) -> TurnOutput {
                 .to_string(),
         ]);
     }
+    // Claude Code keeps its own system prompt; Sinew's plan rules and the
+    // "implement this plan" reminder are appended to it.
+    let mut appended = Vec::new();
+    if mode == AgentMode::Plan {
+        appended.push(super::mode::plan_mode_prompt_for_claude_code(
+            tool_settings.plan_mode_prompt(),
+        ));
+    }
+    if let Some(reminder) = tagged_block(&system_prompt, "plan_implementation_turn") {
+        appended.push(reminder);
+    }
     if browser_on {
-        args.extend([
-            "--append-system-prompt".into(),
+        appended.push(
             super::turn::BROWSER_TOOLS_PROMPT
                 .replace("browser_* tools", "mcp__sinew__browser_* tools")
                 .trim()
                 .to_string(),
-        ]);
+        );
+    }
+    if !appended.is_empty() {
+        args.extend(["--append-system-prompt".into(), appended.join("\n\n")]);
     }
 
     let mut turn = Turn {
@@ -559,9 +582,10 @@ impl Turn {
                 self.emit(AgentEvent::TextStarted);
                 self.emit(AgentEvent::TextChunk { delta: plan.to_string() });
                 self.emit(AgentEvent::TextFinished);
+                // Marked so the plan file gets this, not Claude's closing line.
                 self.push_part(Part::Text {
                     text: plan.to_string(),
-                    meta: None,
+                    meta: Some(json!({ "plan_proposal": true })),
                 });
             }
             return;
@@ -1444,6 +1468,19 @@ mod tests {
         let outcome = outcome.expect("a result");
         eprintln!("result: {}", outcome["result"]);
         process.shutdown(Duration::from_secs(2)).await;
+    }
+
+    #[test]
+    fn hands_the_implementation_reminder_to_claude_code() {
+        let prompt = "base\n\n<plan_implementation_turn>\nYou are implementing this plan.\n</plan_implementation_turn>\nmore";
+        assert_eq!(
+            tagged_block(prompt, "plan_implementation_turn").as_deref(),
+            Some("<plan_implementation_turn>\nYou are implementing this plan.\n</plan_implementation_turn>")
+        );
+        assert_eq!(tagged_block("base", "plan_implementation_turn"), None);
+        let plan = super::super::mode::plan_mode_prompt_for_claude_code("");
+        assert!(plan.contains("ExitPlanMode") && plan.contains("## Steps"));
+        assert!(!plan.contains("write_plan"));
     }
 
     #[test]

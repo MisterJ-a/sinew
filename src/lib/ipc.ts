@@ -341,6 +341,12 @@ export const api = {
       { input: { workspacePath, path, content } },
     );
   },
+  browseSetupStatus() {
+    return invoke<{ configured: boolean; enabled: boolean }>("browse_setup_status");
+  },
+  enableBrowseMcp() {
+    return invoke<McpSettings>("enable_browse_mcp");
+  },
   browserViewStart(workspacePath: string) {
     return invoke<number>("browser_view_start", { input: { workspacePath } });
   },

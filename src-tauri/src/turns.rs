@@ -114,6 +114,20 @@ pub(super) async fn send_message(
     }
 
     let policy = plan_turn_policy(&conversation.plan_workflow, requested_mode, plan_control)?;
+    // Implementing a plan: its steps become the todo list, and are checked
+    // off in the plan file as the agent finishes them.
+    let implemented_plan = if matches!(plan_control, Some(PlanControlInput::ImplementPlan)) {
+        implemented_plan_path(&workspace_root, &conversation.plan_workflow, &input.attachments)
+    } else {
+        None
+    };
+    if let Some(todo) = implemented_plan
+        .as_deref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|markdown| todo_from_plan(&markdown))
+    {
+        conversation.todo_list = todo;
+    }
     let turn_plan_reminder = plan_implementation_turn_reminder(
         &workspace_root,
         &conversation.plan_workflow,
@@ -403,6 +417,15 @@ pub(super) async fn send_message(
                                             },
                                         );
                                     }
+                                }
+                            }
+                            if let Some(path) = implemented_plan.as_deref() {
+                                if sync_plan_checkboxes(path, &output.todo_list) {
+                                    emit_workspace_file_change(
+                                        &app,
+                                        &workspace_root_for_output,
+                                        &path.to_string_lossy(),
+                                    );
                                 }
                             }
                             let turn_duration_ms = goal_workflow_duration_ms(&goal_workflow);
@@ -1266,7 +1289,8 @@ pub(super) fn plan_implementation_turn_reminder(
     lines.extend([
         "Treat the plan as the source of truth for this implementation run.".to_string(),
         "Use the ToDoList tool to track implementation progress when the plan has multiple steps, and keep it updated until the plan is complete.".to_string(),
-        "Read the plan file when you need details, keep changes aligned with it, and complete the implementation before your final response.".to_string(),
+        "Read the plan file first: the user may have edited it since it was written. Its Implementation notes are meant for you.".to_string(),
+        "Its Steps are loaded in your todo list (Claude Code: put them in TodoWrite). Work through them in order, check each one's \"done when\" before marking it done, and keep changes aligned with the plan. Complete the implementation before your final response.".to_string(),
     ]);
 
     let skills: Vec<&str> = implement_skills
@@ -1360,15 +1384,23 @@ pub(super) fn attach_latest_plan_artifact(
     turn_user_history_index: usize,
     skip_if_question_tool: bool,
 ) -> Result<Option<PlanArtifactState>> {
-    if skip_if_question_tool && turn_has_question_tool(history, turn_user_history_index) {
+    let written = written_plan(history, turn_user_history_index);
+    if written.is_none()
+        && skip_if_question_tool
+        && turn_has_question_tool(history, turn_user_history_index)
+    {
         return Ok(None);
     }
 
-    let Some(assistant_index) = latest_assistant_index_after(history, turn_user_history_index)
-    else {
-        return Ok(None);
+    let (assistant_index, plan_text) = match written {
+        Some(found) => found,
+        None => {
+            let Some(index) = plan_message_index(history, turn_user_history_index) else {
+                return Ok(None);
+            };
+            (index, assistant_plan_text(&history[index]))
+        }
     };
-    let plan_text = assistant_plan_text(&history[assistant_index]);
     if plan_text.trim().is_empty() {
         return Ok(None);
     }
@@ -1422,7 +1454,8 @@ pub(super) fn turn_has_question_tool(
         .any(|part| {
             matches!(
                 part,
-                Part::ToolCall { name, .. } if name == "Question"
+                Part::ToolCall { name, .. }
+                    if sinew_app::tool_names::canonical_tool_name(name) == sinew_app::tool_names::QUESTION
             )
         })
 }
@@ -1446,14 +1479,164 @@ pub(super) fn latest_question_stop_requested(
         })
 }
 
-pub(super) fn latest_assistant_index_after(
+/// The plan the agent saved with `write_plan` this turn (the latest call),
+/// with the index of the assistant message that made it.
+pub(super) fn written_plan(
+    history: &[ChatMessage],
+    turn_user_history_index: usize,
+) -> Option<(usize, String)> {
+    let start = turn_user_history_index.saturating_add(1);
+    (start..history.len()).rev().find_map(|index| {
+        let message = &history[index];
+        if message.role != Role::Assistant {
+            return None;
+        }
+        message.parts.iter().rev().find_map(|part| match part {
+            Part::ToolCall { name, input, .. } if name == "write_plan" => input
+                .get("markdown")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| (index, text.to_string())),
+            _ => None,
+        })
+    })
+}
+
+/// The plan file a plan implementation runs from, absolute.
+pub(super) fn implemented_plan_path(
+    workspace_root: &Path,
+    workflow: &PlanWorkflowState,
+    attachments: &[AttachmentInput],
+) -> Option<PathBuf> {
+    let plan = match workflow {
+        PlanWorkflowState::PlanReady { artifact } => {
+            Some(plan_reference_from_artifact(workspace_root, artifact))
+        }
+        _ => plan_reference_from_attachments(workspace_root, attachments),
+    }?;
+    let path = resolve_attachment_path(workspace_root, &plan.path);
+    path.is_file().then_some(path)
+}
+
+/// `- [ ] step` / `- [x] step` lines of the plan's `## Steps` section.
+fn plan_step_lines(markdown: &str) -> Vec<(usize, bool, String)> {
+    let mut in_steps = false;
+    let mut steps = Vec::new();
+    for (index, line) in markdown.lines().enumerate() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            in_steps = heading.trim().eq_ignore_ascii_case("steps");
+            continue;
+        }
+        if !in_steps {
+            continue;
+        }
+        let item = trimmed
+            .strip_prefix("- [ ] ")
+            .map(|text| (false, text))
+            .or_else(|| trimmed.strip_prefix("- [x] ").map(|text| (true, text)))
+            .or_else(|| trimmed.strip_prefix("- [X] ").map(|text| (true, text)));
+        if let Some((done, text)) = item {
+            steps.push((index, done, text.trim().to_string()));
+        }
+    }
+    steps
+}
+
+/// The todo list for implementing `markdown`'s steps. `None` without steps.
+pub(super) fn todo_from_plan(markdown: &str) -> Option<TodoListState> {
+    let steps = plan_step_lines(markdown);
+    if steps.is_empty() {
+        return None;
+    }
+    let tasks: Vec<TodoTask> = steps
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, done, text))| TodoTask {
+            id: (index + 1).to_string(),
+            text,
+            status: if done { TodoStatus::Done } else { TodoStatus::Pending },
+        })
+        .collect();
+    Some(TodoListState {
+        active: true,
+        next_id: tasks.len() as u32 + 1,
+        tasks,
+    })
+}
+
+/// Checks off, in the plan file, the steps the todo list marks done.
+/// Returns whether the file changed.
+pub(super) fn sync_plan_checkboxes(path: &Path, todo: &TodoListState) -> bool {
+    let Ok(markdown) = fs::read_to_string(path) else {
+        return false;
+    };
+    let updated = plan_with_checked_steps(&markdown, todo);
+    updated != markdown && fs::write(path, updated).is_ok()
+}
+
+pub(super) fn plan_with_checked_steps(markdown: &str, todo: &TodoListState) -> String {
+    let done: Vec<&str> = todo
+        .tasks
+        .iter()
+        .filter(|task| matches!(task.status, TodoStatus::Done))
+        .map(|task| task.text.trim())
+        .collect();
+    let to_check: Vec<usize> = plan_step_lines(markdown)
+        .into_iter()
+        .filter(|(_, already, text)| !already && done.contains(&text.as_str()))
+        .map(|(index, _, _)| index)
+        .collect();
+    if to_check.is_empty() {
+        return markdown.to_string();
+    }
+    let mut out: Vec<String> = markdown
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if to_check.contains(&index) {
+                line.replacen("- [ ] ", "- [x] ", 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    if markdown.ends_with('\n') {
+        out.push(String::new());
+    }
+    out.join("\n")
+}
+
+/// The assistant message of this turn that holds the plan. Not simply the
+/// last one: models often write the plan, call a tool, then end with a line
+/// like "Here is the plan, tell me what you think", and that line used to
+/// become the whole plan file. A message the harness marked as the plan
+/// (Claude Code's ExitPlanMode) wins; otherwise the longest one, the latest
+/// on a tie.
+pub(super) fn plan_message_index(
     history: &[ChatMessage],
     turn_user_history_index: usize,
 ) -> Option<usize> {
     let start = turn_user_history_index.saturating_add(1);
-    (start..history.len())
-        .rev()
-        .find(|index| matches!(history[*index].role, Role::Assistant))
+    let assistants: Vec<usize> = (start..history.len())
+        .filter(|index| matches!(history[*index].role, Role::Assistant))
+        .collect();
+    let marked = assistants.iter().rev().copied().find(|index| {
+        history[*index].parts.iter().any(|part| {
+            part_meta(part)
+                .and_then(|meta| meta.get("plan_proposal"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+    });
+    marked.or_else(|| {
+        assistants
+            .iter()
+            .copied()
+            .filter(|index| !assistant_plan_text(&history[*index]).trim().is_empty())
+            .max_by_key(|index| (assistant_plan_text(&history[*index]).chars().count(), *index))
+    })
 }
 
 pub(super) fn assistant_plan_text(message: &ChatMessage) -> String {

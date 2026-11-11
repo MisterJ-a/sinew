@@ -49,7 +49,8 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use image::CreateImageTool;
 pub use mcp::{
-    merge_imported_mcp_servers, parse_mcp_import_file, probe_mcp_servers, ImportMcpResult,
+    browse_server_config, is_browse_server, merge_imported_mcp_servers, parse_mcp_import_file,
+    probe_mcp_servers, ImportMcpResult,
     McpImportFormat, McpOAuthClientConfig, McpServerConfig, McpServerProbe, McpSettings,
     McpToolRegistry, McpTransport,
 };

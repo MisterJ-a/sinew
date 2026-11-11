@@ -174,6 +174,10 @@ impl McpToolRegistry {
         }
     }
 
+    pub fn browse_enabled(&self) -> bool {
+        self.settings.browse_enabled()
+    }
+
     pub async fn refresh_catalog(&self, history: &[ChatMessage]) -> Vec<ToolDescriptor> {
         let mut next_bindings = HashMap::new();
 
@@ -912,6 +916,90 @@ pub(crate) fn short_hash<T: Hash>(value: &T) -> String {
 
 fn default_enabled() -> bool {
     true
+}
+
+/// OpenCode Browse: lets the agent drive the user's own Chrome (their logins,
+/// tabs and extensions) through a browser extension. Sinew ships it as a
+/// default server, off until the user sets the extension up.
+pub const BROWSE_SERVER_ID: &str = "mcp_browse";
+const BROWSE_PACKAGE: &str = "@opencode/browse";
+
+pub fn is_browse_server(server: &McpServerConfig) -> bool {
+    server.id == BROWSE_SERVER_ID
+        || server.name.eq_ignore_ascii_case("browse")
+        || server.args.iter().any(|arg| arg.starts_with(BROWSE_PACKAGE))
+}
+
+/// The Browse server config for this machine. On Windows it runs Windows'
+/// own `node.exe`: Browse must reach the extension in the Windows Chrome, and
+/// in WSL mode Sinew would run a plain `npx` inside WSL.
+pub fn browse_server_config(enabled: bool) -> McpServerConfig {
+    let mut args = vec!["-y".to_string(), BROWSE_PACKAGE.to_string(), "mcp".to_string()];
+    let mut command = "npx".to_string();
+    #[cfg(windows)]
+    if let Some(node) = windows_node_executable() {
+        let npx_cli = node
+            .parent()
+            .map(|dir| dir.join("node_modules").join("npm").join("bin").join("npx-cli.js"))
+            .filter(|path| path.is_file());
+        if let Some(npx_cli) = npx_cli {
+            command = node.display().to_string();
+            args.insert(0, npx_cli.display().to_string());
+        }
+    }
+    McpServerConfig {
+        id: BROWSE_SERVER_ID.to_string(),
+        name: "browse".to_string(),
+        command,
+        args,
+        env: Vec::new(),
+        cwd: None,
+        enabled,
+        transport: McpTransport::Stdio,
+        url: None,
+        headers: Vec::new(),
+        oauth: None,
+    }
+}
+
+#[cfg(windows)]
+fn windows_node_executable() -> Option<PathBuf> {
+    let from_path = env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths)
+            .map(|dir| dir.join("node.exe"))
+            .find(|path| path.is_file())
+    });
+    from_path.or_else(|| {
+        env::var_os("ProgramFiles")
+            .map(|dir| PathBuf::from(dir).join("nodejs").join("node.exe"))
+            .filter(|path| path.is_file())
+    })
+}
+
+impl McpSettings {
+    /// Adds the Browse server, off, unless one is already there. Returns
+    /// whether it changed anything.
+    pub fn add_default_browse(&mut self) -> bool {
+        if self.servers.iter().any(is_browse_server) {
+            return false;
+        }
+        self.servers.push(browse_server_config(false));
+        true
+    }
+
+    /// Turns Browse on, adding it first if needed.
+    pub fn enable_browse(&mut self) {
+        match self.servers.iter_mut().find(|server| is_browse_server(server)) {
+            Some(server) => server.enabled = true,
+            None => self.servers.push(browse_server_config(true)),
+        }
+    }
+
+    pub fn browse_enabled(&self) -> bool {
+        self.servers
+            .iter()
+            .any(|server| server.enabled && is_browse_server(server))
+    }
 }
 
 struct McpStdioClient {

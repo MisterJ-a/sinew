@@ -29,7 +29,10 @@ use super::{
         normalize_tool_call_inputs, repair_missing_tool_results, strip_all_visible_tool_result_ids,
         successful_read_fingerprints,
     },
-    mode::{run_update_goal, system_prompt_for_turn, update_goal_descriptor},
+    mode::{
+        run_update_goal, run_write_plan, system_prompt_for_turn, update_goal_descriptor,
+        write_plan_descriptor, WRITE_PLAN_TOOL,
+    },
     tool_dispatch::{run_tool, should_wait_for_cooperative_cancel},
     tool_preflight::{preflight_error_result, ToolPreflightRegistry},
     tool_summary::{display_mcp_server_name, pretty_json, should_stream_tool_args, summarize_tool},
@@ -51,6 +54,9 @@ enum Guarded<T> {
 /// backoff — which are otherwise unguarded, so a Stop click during a slow
 /// connection or a retry sleep would appear to do nothing until the await
 /// finished on its own. Biased so Cancel always wins a tie.
+/// Added when the user turned on OpenCode Browse.
+pub(super) const BROWSE_MCP_PROMPT: &str = "\n<user_browser>\nThe `browse` MCP server drives the user's own Chrome, with their logins, tabs and extensions. Use it (load its tools with load_mcp_tool) when a page needs the user's session or an account they are signed in to, or when they ask you to use their browser; keep the browser_* tools for everything else. When a login, 2FA or anti-bot check blocks you, hand off to the user with browse's handoff instead of retrying.\n</user_browser>";
+
 /// Guidance for the browser tools, appended to the system prompt when they
 /// are on.
 pub(super) const BROWSER_TOOLS_PROMPT: &str =
@@ -190,6 +196,9 @@ pub async fn run_turn(ctx: TurnContext) -> TurnOutput {
         if mode == AgentMode::Goal {
             tool_descriptors.push(update_goal_descriptor());
         }
+        if mode == AgentMode::Plan {
+            tool_descriptors.push(write_plan_descriptor());
+        }
         tool_descriptors.extend(mcp.descriptors().await);
         if let Some(subagents) = &subagents {
             tool_descriptors.extend(subagents.descriptors());
@@ -221,6 +230,9 @@ pub async fn run_turn(ctx: TurnContext) -> TurnOutput {
         // launches Chrome/Edge natively on Windows via CDP.
         if tool_settings.browser_enabled && mode != AgentMode::Plan {
             current_system_prompt.push_str(BROWSER_TOOLS_PROMPT);
+            if mcp.browse_enabled() {
+                current_system_prompt.push_str(BROWSE_MCP_PROMPT);
+            }
         }
         if tool_settings.ponytail_enabled {
             current_system_prompt.push_str("\n\n<ponytail>\n");
@@ -712,6 +724,8 @@ pub async fn run_turn(ctx: TurnContext) -> TurnOutput {
                     run_clean_context(&mut history, input.clone(), &current_turn_tool_result_ids)
                 } else if name == "update_goal" {
                     run_update_goal(&mut goal_workflow, input.clone())
+                } else if name == WRITE_PLAN_TOOL {
+                    run_write_plan(input.clone())
                 } else if let Some(handle) = eager_tool_results.remove(id) {
                     match handle.await {
                         Ok(mut result) => {
