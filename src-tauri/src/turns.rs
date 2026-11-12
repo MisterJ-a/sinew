@@ -1384,7 +1384,10 @@ pub(super) fn attach_latest_plan_artifact(
     turn_user_history_index: usize,
     skip_if_question_tool: bool,
 ) -> Result<Option<PlanArtifactState>> {
-    let written = written_plan(history, turn_user_history_index);
+    // A plan handed in explicitly (write_plan, or Claude's ExitPlanMode)
+    // counts even when the same turn asked questions first.
+    let written = written_plan(history, turn_user_history_index)
+        .or_else(|| proposed_plan(history, turn_user_history_index));
     if written.is_none()
         && skip_if_question_tool
         && turn_has_question_tool(history, turn_user_history_index)
@@ -1498,6 +1501,34 @@ pub(super) fn written_plan(
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
                 .map(|text| (index, text.to_string())),
+            _ => None,
+        })
+    })
+}
+
+/// The plan Claude Code handed in with ExitPlanMode this turn: the message
+/// part marked `plan_proposal`.
+pub(super) fn proposed_plan(
+    history: &[ChatMessage],
+    turn_user_history_index: usize,
+) -> Option<(usize, String)> {
+    let start = turn_user_history_index.saturating_add(1);
+    (start..history.len()).rev().find_map(|index| {
+        let message = &history[index];
+        if message.role != Role::Assistant {
+            return None;
+        }
+        message.parts.iter().rev().find_map(|part| match part {
+            Part::Text { text, meta }
+                if meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("plan_proposal"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    && !text.trim().is_empty() =>
+            {
+                Some((index, text.trim().to_string()))
+            }
             _ => None,
         })
     })

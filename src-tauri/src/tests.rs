@@ -366,3 +366,33 @@ fn a_written_plan_wins_and_question_turns_are_not_plans() {
     let questions = vec![user, assistant(vec![say("Which one?"), call("question", json!({}))])];
     assert!(turn_has_question_tool(&questions, 0));
 }
+
+#[test]
+fn a_claude_plan_counts_even_after_questions_in_the_same_turn() {
+    let root = std::env::temp_dir().join(format!("sinew-plan-claude-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let say = |value: &str, meta: Option<Value>| Part::Text { text: value.into(), meta };
+    let mut history = vec![
+        ChatMessage { role: Role::User, parts: vec![say("plan it", None)] },
+        ChatMessage {
+            role: Role::Assistant,
+            parts: vec![Part::ToolCall { id: "q".into(), name: "question".into(), input: json!({}), meta: None }],
+        },
+        ChatMessage {
+            role: Role::Assistant,
+            parts: vec![say("# The plan\n\n## Steps\n- [ ] Do it", Some(json!({ "plan_proposal": true })))],
+        },
+        ChatMessage { role: Role::Assistant, parts: vec![say("Plan ready.", None)] },
+    ];
+    let artifact = attach_latest_plan_artifact(&root, "conv", &mut history, 0, true)
+        .unwrap()
+        .expect("the handed-in plan is saved");
+    let saved = std::fs::read_to_string(root.join(&artifact.path)).unwrap();
+    assert!(saved.starts_with("# The plan"), "{saved}");
+
+    // Questions only: still no plan.
+    let mut questions = history[..2].to_vec();
+    assert!(attach_latest_plan_artifact(&root, "conv", &mut questions, 0, true).unwrap().is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}

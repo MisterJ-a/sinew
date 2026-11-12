@@ -1148,6 +1148,23 @@ async fn permission(
         if result.is_error {
             return deny(result.content, tool_use_id);
         }
+        let stop_requested = result
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("question_stop_requested"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if stop_requested {
+            // "Send and stop questions": the answers alone would let Claude
+            // keep asking. Its plan rules wait for this control.
+            return deny(
+                format!(
+                    "{}\n\n<plan_mode_control action=\"stop_questions\">\nThe user clicked Send and stop questions. Do not ask more questions. Write the complete plan now and hand it in with the ExitPlanMode tool.\n</plan_mode_control>",
+                    result.content
+                ),
+                tool_use_id,
+            );
+        }
         let given = result
             .meta
             .as_ref()
@@ -1481,6 +1498,53 @@ mod tests {
         let plan = super::super::mode::plan_mode_prompt_for_claude_code("");
         assert!(plan.contains("ExitPlanMode") && plan.contains("## Steps"));
         assert!(!plan.contains("write_plan"));
+    }
+
+    /// "Send and stop questions" on an AskUserQuestion must reach Claude as
+    /// the stop control, or it keeps asking.
+    #[tokio::test]
+    async fn stop_questions_reaches_claude_code() {
+        let (event_tx, _events) = mpsc::unbounded_channel();
+        let cancel = TurnCancel::empty();
+        let question = QuestionTool::new();
+        let request = json!({
+            "tool_name": "AskUserQuestion",
+            "tool_use_id": "toolu_q",
+            "input": { "questions": [{
+                "question": "Which database?", "header": "DB", "multiSelect": false,
+                "options": [{ "label": "Postgres", "description": "" }, { "label": "SQLite", "description": "" }]
+            }] }
+        });
+        let settings = ToolSettings::default();
+        let root = std::env::temp_dir();
+        let asking = permission(&request, &event_tx, &cancel, &root, &settings, Some(&question));
+        let answering = async {
+            for _ in 0..50 {
+                if cancel.answer_question("toolu_q", vec![vec!["Postgres".into()]], true) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("the question was never asked");
+        };
+        let (answer, ()) = tokio::join!(asking, answering);
+        assert_eq!(answer["behavior"], "deny", "{answer}");
+        let message = answer["message"].as_str().unwrap();
+        assert!(message.contains("Postgres") && message.contains("stop_questions"), "{message}");
+
+        // A normal answer still goes through as answers.
+        let asking = permission(&request, &event_tx, &cancel, &root, &settings, Some(&question));
+        let answering = async {
+            for _ in 0..50 {
+                if cancel.answer_question("toolu_q", vec![vec!["SQLite".into()]], false) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        let (answer, ()) = tokio::join!(asking, answering);
+        assert_eq!(answer["behavior"], "allow");
+        assert_eq!(answer["updatedInput"]["answers"]["Which database?"], "SQLite");
     }
 
     #[test]

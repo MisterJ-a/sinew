@@ -18,6 +18,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.2.55",
+    date: "2026-11-12",
+    items: [
+      {
+        icon: "solar:restart-bold-duotone",
+        title: "Plan mode with Claude fixed",
+        body: "\"Send and stop questions\" now ends the questions and Claude writes the plan, instead of asking again; the plan is saved and opens for review.",
+      },
+    ],
+  },
+  {
     version: "0.2.54",
     date: "2026-11-11",
     items: [
